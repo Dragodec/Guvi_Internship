@@ -1,0 +1,34 @@
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    letter-spacing: -0.01em;
+}
+
+.form-control:focus {
+    background-color: #f8f9fa !important;
+    border-color: #212529 !important;
+    box-shadow: none !important;
+}
+
+.input-group .form-control:focus + .btn, 
+.input-group .form-control:focus ~ .btn {
+    border-color: #212529 !important;
+}
+
+.form-control.is-invalid,
+.form-control:invalid {
+    background-image: none !important;
+    padding-right: 0.75rem !important;
+}
+
+.btn-dark {
+    background-color: #111111;
+    border: none;
+}
+
+.btn-dark:hover {
+    background-color: #222222;
+}
+
+.card {
+    border-radius: 12px;
+}
