@@ -25,6 +25,8 @@ class DevConfig
 
     private string $clientUrl;
 
+    private int $sessionTtl;
+
     private function __construct()
     {
         $dotenv = Dotenv::createImmutable(__DIR__ . '/..');
@@ -46,6 +48,17 @@ class DevConfig
             : null;
 
         $this->clientUrl = $_ENV['CLIENT_URL'];
+
+        $sessionTtl = filter_var(
+        $_ENV['SESSION_TTL'] ?? null,
+        FILTER_VALIDATE_INT
+    );
+
+    if ($sessionTtl === false || $sessionTtl <= 0) {
+        throw new RuntimeException('SESSION_TTL must be a positive integer.');
+    }
+
+    $this->sessionTtl = $sessionTtl;
     }
 
     public static function getInstance(): DevConfig
@@ -110,5 +123,10 @@ class DevConfig
     public function getClientUrl(): string
     {
         return $this->clientUrl;
+    }
+
+    public function getSessionTtl(): int
+    {
+        return $this->sessionTtl;
     }
 }

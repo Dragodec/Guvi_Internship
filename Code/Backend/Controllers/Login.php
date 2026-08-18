@@ -143,7 +143,7 @@ try {
         'last_activity' => $createdAtString
     ]);
 
-    $redis->expire($sessionKey, 3600);
+    $redis->expire($sessionKey, $config->getSessionTtl());
 
     http_response_code(200);
 
