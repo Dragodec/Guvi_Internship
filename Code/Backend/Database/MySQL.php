@@ -31,6 +31,9 @@ class MySQL
                     PDO::ATTR_EMULATE_PREPARES => false,
                 ]
             );
+
+            $this->ensureUsersTable();
+
         } catch (PDOException $e) {
             throw new RuntimeException(
                 'MySQL connection failed: ' . $e->getMessage(),
@@ -43,5 +46,28 @@ class MySQL
     public function getConnection(): PDO
     {
         return $this->connection;
+    }
+
+    private function ensureUsersTable(): void
+    {
+        $statement = $this->connection->prepare(
+            "CREATE TABLE IF NOT EXISTS users (
+                user_id CHAR(36) NOT NULL,
+                email VARCHAR(254) NOT NULL,
+                password_hash VARCHAR(255) NOT NULL,
+                is_suspended BOOLEAN NOT NULL DEFAULT FALSE,
+
+                PRIMARY KEY (user_id),
+
+                UNIQUE (email),
+
+                CONSTRAINT chk_email_format
+                    CHECK (
+                        email REGEXP '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\\\.[A-Za-z]{2,}$'
+                    )
+            )"
+        );
+
+        $statement->execute();
     }
 }
