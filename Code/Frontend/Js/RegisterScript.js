@@ -113,7 +113,7 @@ $(document).ready(function() {
         };
 
         $.ajax({
-            url: 'http://127.0.0.1:8000/Controllers/Register.php',
+            url: 'https://guvi-internship-cw1p.onrender.com/Controllers/Register.php',
             type: 'POST',
             data: formData,
             dataType: 'json',

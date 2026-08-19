@@ -30,7 +30,7 @@ $(document).ready(function() {
     }
 
     $.ajax({
-        url: 'http://127.0.0.1:8000/Controllers/Profile.php',
+        url: 'https://guvi-internship-cw1p.onrender.com/Controllers/Profile.php',
         type: 'POST',
         data: {
             token: sessionToken
@@ -82,7 +82,7 @@ $(document).ready(function() {
         }
 
         $.ajax({
-            url: 'http://127.0.0.1:8000/Controllers/Logout.php',
+            url: 'https://guvi-internship-cw1p.onrender.com/Controllers/Logout.php',
             type: 'POST',
             data: {
                 token: sessionToken
