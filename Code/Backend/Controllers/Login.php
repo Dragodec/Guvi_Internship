@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/../Config/CorsConfig.php';
+require_once __DIR__ . '/../Config/RateLimiter.php';
 require_once __DIR__ . '/../Database/MySQL.php';
 require_once __DIR__ . '/../Database/Redis.php';
 
@@ -55,13 +56,84 @@ if ($password === '') {
 
 try {
     /*
-     * Get MySQL connection
+     * Initialize rate limiter.
+     */
+    $rateLimiter = new RateLimiter();
+
+    /*
+     * Get client IP address.
+     */
+    $clientIp = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+
+    /*
+     * Create hashed Redis keys.
+     */
+    $emailKey = 'rate_limit:login:email:' . hash(
+        'sha256',
+        strtolower($email)
+    );
+
+    $ipKey = 'rate_limit:login:ip:' . hash(
+        'sha256',
+        $clientIp
+    );
+
+    /*
+     * Rate limit by email.
+     * Maximum: 5 attempts every 15 minutes.
+     */
+    if (!$rateLimiter->attempt(
+        $emailKey,
+        5,
+        900
+    )) {
+        $retryAfter = $rateLimiter->getRetryAfter(
+            $emailKey
+        );
+
+        http_response_code(429);
+
+        echo json_encode([
+            'success' => false,
+            'message' => 'Too many login attempts. Please try again later.',
+            'retry_after' => $retryAfter
+        ]);
+
+        exit;
+    }
+
+    /*
+     * Rate limit by IP address.
+     * Maximum: 20 attempts every 15 minutes.
+     */
+    if (!$rateLimiter->attempt(
+        $ipKey,
+        20,
+        900
+    )) {
+        $retryAfter = $rateLimiter->getRetryAfter(
+            $ipKey
+        );
+
+        http_response_code(429);
+
+        echo json_encode([
+            'success' => false,
+            'message' => 'Too many requests. Please try again later.',
+            'retry_after' => $retryAfter
+        ]);
+
+        exit;
+    }
+
+    /*
+     * Get MySQL connection.
      */
     $mysqlConnection = new MySQL();
     $mysql = $mysqlConnection->getConnection();
 
     /*
-     * Find user
+     * Find user.
      */
     $getUser = $mysql->prepare(
         'SELECT user_id, password_hash, is_suspended
@@ -76,19 +148,22 @@ try {
 
     $user = $getUser->fetch();
 
+    /*
+     * Prevent account enumeration.
+     */
     if ($user === false) {
-        http_response_code(404);
+        http_response_code(401);
 
         echo json_encode([
             'success' => false,
-            'message' => 'Couldn\'t find your account.'
+            'message' => 'Invalid credentials.'
         ]);
 
         exit;
     }
 
     /*
-     * Verify password
+     * Verify password.
      */
     if (!password_verify($password, $user['password_hash'])) {
         http_response_code(401);
@@ -102,7 +177,7 @@ try {
     }
 
     /*
-     * Check account suspension
+     * Check account suspension.
      */
     if ((int) $user['is_suspended'] === 1) {
         http_response_code(403);
@@ -116,7 +191,15 @@ try {
     }
 
     /*
-     * Generate session token
+     * Successful authentication.
+     * Clear failed login attempts for this email.
+     */
+    $rateLimiter->reset(
+        $emailKey
+    );
+
+    /*
+     * Generate session token.
      */
     $sessionToken = rtrim(
         strtr(
@@ -128,7 +211,7 @@ try {
     );
 
     /*
-     * Hash token before storing session in Redis
+     * Hash token before storing session in Redis.
      */
     $sessionId = hash(
         'sha256',
@@ -142,7 +225,7 @@ try {
     );
 
     /*
-     * Create Redis session
+     * Create Redis session.
      */
     $redisConnection = new RedisConnection();
 

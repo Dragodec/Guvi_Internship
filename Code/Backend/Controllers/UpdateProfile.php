@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/../Config/CorsConfig.php';
+require_once __DIR__ . '/../Config/RateLimiter.php';
 require_once __DIR__ . '/../Database/Redis.php';
 require_once __DIR__ . '/../Database/MySQL.php';
 require_once __DIR__ . '/../Database/Mongo.php';
@@ -95,7 +96,49 @@ if (
 
 try {
     /*
-     * Convert browser token into Redis session ID
+     * Initialize rate limiter.
+     */
+    $rateLimiter = new RateLimiter();
+
+    /*
+     * Get client IP address.
+     */
+    $clientIp = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+
+    /*
+     * Create Redis key for profile update rate limiting.
+     */
+    $ipKey = 'rate_limit:update_profile:ip:' . hash(
+        'sha256',
+        $clientIp
+    );
+
+    /*
+     * Rate limit profile update requests by IP address.
+     * Maximum: 20 requests every 60 seconds.
+     */
+    if (!$rateLimiter->attempt(
+        $ipKey,
+        20,
+        60
+    )) {
+        $retryAfter = $rateLimiter->getRetryAfter(
+            $ipKey
+        );
+
+        http_response_code(429);
+
+        echo json_encode([
+            'success' => false,
+            'message' => 'Too many update requests. Please try again later.',
+            'retry_after' => $retryAfter
+        ]);
+
+        exit;
+    }
+
+    /*
+     * Convert browser token into Redis session ID.
      */
     $sessionId = hash(
         'sha256',
@@ -103,7 +146,7 @@ try {
     );
 
     /*
-     * Get Redis session
+     * Get Redis session.
      */
     $redisConnection = new RedisConnection();
 
@@ -123,7 +166,7 @@ try {
     }
 
     /*
-     * Validate session structure
+     * Validate session structure.
      */
     if (
         !isset($sessionData['user_id']) ||
@@ -147,7 +190,7 @@ try {
     $userId = $sessionData['user_id'];
 
     /*
-     * Verify MySQL account
+     * Verify MySQL account.
      */
     $mysqlConnection = new MySQL();
     $mysql = $mysqlConnection->getConnection();
@@ -196,7 +239,7 @@ try {
     }
 
     /*
-     * Get MongoDB profile collection
+     * Get MongoDB profile collection.
      */
     $mongoConnection = new Mongo();
     $mongoDatabase = $mongoConnection->getDatabase();

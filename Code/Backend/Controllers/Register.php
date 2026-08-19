@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/../Config/CorsConfig.php';
+require_once __DIR__ . '/../Config/RateLimiter.php';
 require_once __DIR__ . '/../Database/MySQL.php';
 require_once __DIR__ . '/../Database/Mongo.php';
 
@@ -111,18 +112,57 @@ if ($password === '') {
     exit;
 }
 
-$mysql = null;
-$userId = null;
-
 try {
     /*
-     * Get MySQL connection
+     * Initialize rate limiter.
+     */
+    $rateLimiter = new RateLimiter();
+
+    /*
+     * Get client IP address.
+     */
+    $clientIp = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+
+    /*
+     * Create Redis key for registration rate limiting.
+     */
+    $ipKey = 'rate_limit:register:ip:' . hash(
+        'sha256',
+        $clientIp
+    );
+
+    /*
+     * Rate limit registration attempts by IP address.
+     * Maximum: 10 attempts every 15 minutes.
+     */
+    if (!$rateLimiter->attempt(
+        $ipKey,
+        10,
+        900
+    )) {
+        $retryAfter = $rateLimiter->getRetryAfter(
+            $ipKey
+        );
+
+        http_response_code(429);
+
+        echo json_encode([
+            'success' => false,
+            'message' => 'Too many registration attempts. Please try again later.',
+            'retry_after' => $retryAfter
+        ]);
+
+        exit;
+    }
+
+    /*
+     * Get MySQL connection.
      */
     $mysqlConnection = new MySQL();
     $mysql = $mysqlConnection->getConnection();
 
     /*
-     * Check whether email already exists
+     * Check whether email already exists.
      */
     $checkEmail = $mysql->prepare(
         'SELECT user_id
@@ -147,7 +187,7 @@ try {
     }
 
     /*
-     * Get MongoDB connection
+     * Get MongoDB connection.
      */
     $mongoConnection = new Mongo();
     $mongoDatabase = $mongoConnection->getDatabase();
@@ -157,7 +197,7 @@ try {
     );
 
     /*
-     * Check whether contact already exists
+     * Check whether contact already exists.
      */
     $existingContact = $profiles->findOne([
         'contact' => $contact
@@ -175,7 +215,7 @@ try {
     }
 
     /*
-     * Generate UUID v4
+     * Generate UUID v4.
      */
     $bytes = random_bytes(16);
 
@@ -193,7 +233,7 @@ try {
     );
 
     /*
-     * Hash password
+     * Hash password.
      */
     $passwordHash = password_hash(
         $password,
@@ -207,7 +247,7 @@ try {
     }
 
     /*
-     * Create MySQL user
+     * Create MySQL user.
      */
     $mysql->beginTransaction();
 
@@ -233,7 +273,7 @@ try {
 
     try {
         /*
-         * Create MongoDB profile
+         * Create MongoDB profile.
          */
         $profiles->insertOne([
             '_id' => $userId,
@@ -287,6 +327,7 @@ try {
 
 } catch (PDOException $exception) {
     if (
+        isset($mysql) &&
         $mysql !== null &&
         $mysql->inTransaction()
     ) {
@@ -315,6 +356,7 @@ try {
 
 } catch (Throwable $exception) {
     if (
+        isset($mysql) &&
         $mysql !== null &&
         $mysql->inTransaction()
     ) {
