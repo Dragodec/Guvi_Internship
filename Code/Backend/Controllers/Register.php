@@ -2,11 +2,9 @@
 
 declare(strict_types=1);
 
-require_once __DIR__ . '/../Config/DevConfig.php';
 require_once __DIR__ . '/../Config/CorsConfig.php';
-require_once __DIR__ . '/../vendor/autoload.php';
-
-use MongoDB\Client;
+require_once __DIR__ . '/../Database/MySQL.php';
+require_once __DIR__ . '/../Database/Mongo.php';
 
 CorsConfig::apply();
 
@@ -82,7 +80,10 @@ if (!preg_match('/^\d{10}$/', $contact)) {
     exit;
 }
 
-$dobDate = DateTime::createFromFormat('Y-m-d', $dob);
+$dobDate = DateTime::createFromFormat(
+    'Y-m-d',
+    $dob
+);
 
 if (
     $dobDate === false ||
@@ -110,28 +111,19 @@ if ($password === '') {
     exit;
 }
 
-$config = DevConfig::getInstance();
-
 $mysql = null;
 $userId = null;
 
 try {
-    $mysql = new PDO(
-        sprintf(
-            'mysql:host=%s;port=%d;dbname=%s;charset=utf8mb4',
-            $config->getMysqlHost(),
-            $config->getMysqlPort(),
-            $config->getMysqlDatabase()
-        ),
-        $config->getMysqlUsername(),
-        $config->getMysqlPassword(),
-        [
-            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
-            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-            PDO::ATTR_EMULATE_PREPARES => false
-        ]
-    );
+    /*
+     * Get MySQL connection
+     */
+    $mysqlConnection = new MySQL();
+    $mysql = $mysqlConnection->getConnection();
 
+    /*
+     * Check whether email already exists
+     */
     $checkEmail = $mysql->prepare(
         'SELECT user_id
          FROM users
@@ -154,6 +146,37 @@ try {
         exit;
     }
 
+    /*
+     * Get MongoDB connection
+     */
+    $mongoConnection = new Mongo();
+    $mongoDatabase = $mongoConnection->getDatabase();
+
+    $profiles = $mongoDatabase->selectCollection(
+        'profiles'
+    );
+
+    /*
+     * Check whether contact already exists
+     */
+    $existingContact = $profiles->findOne([
+        'contact' => $contact
+    ]);
+
+    if ($existingContact !== null) {
+        http_response_code(409);
+
+        echo json_encode([
+            'success' => false,
+            'message' => 'Contact number already exists.'
+        ]);
+
+        exit;
+    }
+
+    /*
+     * Generate UUID v4
+     */
     $bytes = random_bytes(16);
 
     $bytes[6] = chr(
@@ -169,6 +192,9 @@ try {
         str_split(bin2hex($bytes), 4)
     );
 
+    /*
+     * Hash password
+     */
     $passwordHash = password_hash(
         $password,
         PASSWORD_BCRYPT
@@ -180,6 +206,9 @@ try {
         );
     }
 
+    /*
+     * Create MySQL user
+     */
     $mysql->beginTransaction();
 
     $insertUser = $mysql->prepare(
@@ -203,25 +232,21 @@ try {
     $mysql->commit();
 
     try {
-        $mongoClient = new Client(
-            $config->getMongoUri()
-        );
-
-        $mongoDatabase = $mongoClient->selectDatabase(
-            $config->getMongoDatabase()
-        );
-
-        $profiles = $mongoDatabase->selectCollection(
-            'profiles'
-        );
-
+        /*
+         * Create MongoDB profile
+         */
         $profiles->insertOne([
             '_id' => $userId,
             'name' => $name,
             'contact' => $contact,
             'dob' => $dob
         ]);
+
     } catch (Throwable $mongoException) {
+        /*
+         * Compensating rollback:
+         * Remove MySQL user if MongoDB profile creation fails.
+         */
         $deleteUser = $mysql->prepare(
             'DELETE FROM users
              WHERE user_id = :user_id'
@@ -230,6 +255,25 @@ try {
         $deleteUser->execute([
             ':user_id' => $userId
         ]);
+
+        /*
+         * Duplicate contact number.
+         */
+        if (
+            str_contains(
+                $mongoException->getMessage(),
+                'E11000'
+            )
+        ) {
+            http_response_code(409);
+
+            echo json_encode([
+                'success' => false,
+                'message' => 'Contact number already exists.'
+            ]);
+
+            exit;
+        }
 
         throw $mongoException;
     }
@@ -286,4 +330,3 @@ try {
         'message' => 'Something went wrong. Please try again.'
     ]);
 }
-

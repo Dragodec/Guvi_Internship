@@ -9,7 +9,8 @@ class RedisConnection
     private Redis $connection;
 
     private const SESSION_PREFIX = 'session:';
-    private const SESSION_TTL = 1800;
+
+    private int $sessionTtl;
 
     public function __construct()
     {
@@ -19,13 +20,20 @@ class RedisConnection
         $port = $config->getRedisPort();
         $password = $config->getRedisPassword();
 
+        $this->sessionTtl = $config->getSessionTtl();
+
         try {
             $this->connection = new Redis();
 
-            $this->connection->connect($host, $port);
+            $this->connection->connect(
+                $host,
+                $port
+            );
 
             if ($password !== null) {
-                $this->connection->auth($password);
+                $this->connection->auth(
+                    $password
+                );
             }
 
             if ($this->connection->ping() !== true) {
@@ -50,14 +58,14 @@ class RedisConnection
 
     public function createSession(
         string $sessionId,
-        string $userUuid,
+        string $userId,
         string $createdAt,
         string $lastActivity
     ): bool {
         $key = self::SESSION_PREFIX . $sessionId;
 
         $result = $this->connection->hMSet($key, [
-            'user_uuid' => $userUuid,
+            'user_id' => $userId,
             'created_at' => $createdAt,
             'last_activity' => $lastActivity
         ]);
@@ -66,14 +74,20 @@ class RedisConnection
             return false;
         }
 
-        return $this->connection->expire($key, self::SESSION_TTL);
+        return $this->connection->expire(
+            $key,
+            $this->sessionTtl
+        );
     }
 
-    public function getSession(string $sessionId): ?array
-    {
+    public function getSession(
+        string $sessionId
+    ): ?array {
         $key = self::SESSION_PREFIX . $sessionId;
 
-        $session = $this->connection->hGetAll($key);
+        $session = $this->connection->hGetAll(
+            $key
+        );
 
         if (empty($session)) {
             return null;
@@ -102,21 +116,25 @@ class RedisConnection
             return false;
         }
 
-        return $this->connection->expire($key, self::SESSION_TTL);
+        return $this->connection->expire(
+            $key,
+            $this->sessionTtl
+        );
     }
 
-    public function deleteSession(string $sessionId): bool
-    {
+    public function deleteSession(
+        string $sessionId
+    ): bool {
         $key = self::SESSION_PREFIX . $sessionId;
 
         return $this->connection->del($key) > 0;
     }
 
-    public function getSessionTtl(string $sessionId): int
-    {
+    public function getSessionTtl(
+        string $sessionId
+    ): int {
         $key = self::SESSION_PREFIX . $sessionId;
 
         return $this->connection->ttl($key);
     }
 }
-

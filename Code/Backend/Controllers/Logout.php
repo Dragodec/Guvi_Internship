@@ -2,9 +2,8 @@
 
 declare(strict_types=1);
 
-require_once __DIR__ . '/../Config/DevConfig.php';
 require_once __DIR__ . '/../Config/CorsConfig.php';
-require_once __DIR__ . '/../vendor/autoload.php';
+require_once __DIR__ . '/../Database/Redis.php';
 
 CorsConfig::apply();
 
@@ -35,24 +34,24 @@ if ($sessionToken === '') {
 }
 
 try {
-    $config = DevConfig::getInstance();
-
-    $sessionKey = 'session:' . hash('sha256', $sessionToken);
-
-    $redis = new Redis();
-
-    $redis->connect(
-        $config->getRedisHost(),
-        $config->getRedisPort()
+    /*
+     * Hash browser token to get Redis session ID
+     */
+    $sessionId = hash(
+        'sha256',
+        $sessionToken
     );
 
-    if ($config->getRedisPassword() !== null) {
-        $redis->auth($config->getRedisPassword());
-    }
+    /*
+     * Delete Redis session
+     */
+    $redisConnection = new RedisConnection();
 
-    $deleted = $redis->del($sessionKey);
+    $deleted = $redisConnection->deleteSession(
+        $sessionId
+    );
 
-    if ($deleted === 0) {
+    if (!$deleted) {
         http_response_code(401);
 
         echo json_encode([
@@ -69,6 +68,7 @@ try {
         'success' => true,
         'message' => 'Logout successful.'
     ]);
+
 } catch (Throwable $exception) {
     error_log($exception->getMessage());
 

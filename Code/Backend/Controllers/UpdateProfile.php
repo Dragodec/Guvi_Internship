@@ -2,11 +2,10 @@
 
 declare(strict_types=1);
 
-require_once __DIR__ . '/../Config/DevConfig.php';
 require_once __DIR__ . '/../Config/CorsConfig.php';
-require_once __DIR__ . '/../vendor/autoload.php';
-
-use MongoDB\Client;
+require_once __DIR__ . '/../Database/Redis.php';
+require_once __DIR__ . '/../Database/MySQL.php';
+require_once __DIR__ . '/../Database/Mongo.php';
 
 CorsConfig::apply();
 
@@ -74,7 +73,10 @@ if (!preg_match('/^\d{10}$/', $contact)) {
     exit;
 }
 
-$dobDate = DateTime::createFromFormat('Y-m-d', $dob);
+$dobDate = DateTime::createFromFormat(
+    'Y-m-d',
+    $dob
+);
 
 if (
     $dobDate === false ||
@@ -91,28 +93,25 @@ if (
     exit;
 }
 
-$config = DevConfig::getInstance();
-
-$mysql = null;
-
 try {
     /*
-     * Redis session validation
+     * Convert browser token into Redis session ID
      */
-    $sessionKey = 'session:' . hash('sha256', $sessionToken);
-
-    $redis = new Redis();
-
-    $redis->connect(
-        $config->getRedisHost(),
-        $config->getRedisPort()
+    $sessionId = hash(
+        'sha256',
+        $sessionToken
     );
 
-    if ($config->getRedisPassword() !== null) {
-        $redis->auth($config->getRedisPassword());
-    }
+    /*
+     * Get Redis session
+     */
+    $redisConnection = new RedisConnection();
 
-    if (!$redis->exists($sessionKey)) {
+    $sessionData = $redisConnection->getSession(
+        $sessionId
+    );
+
+    if ($sessionData === null) {
         http_response_code(401);
 
         echo json_encode([
@@ -123,14 +122,17 @@ try {
         exit;
     }
 
-    $sessionData = $redis->hGetAll($sessionKey);
-
+    /*
+     * Validate session structure
+     */
     if (
         !isset($sessionData['user_id']) ||
         !isset($sessionData['created_at']) ||
         !isset($sessionData['last_activity'])
     ) {
-        $redis->del($sessionKey);
+        $redisConnection->deleteSession(
+            $sessionId
+        );
 
         http_response_code(401);
 
@@ -147,21 +149,8 @@ try {
     /*
      * Verify MySQL account
      */
-    $mysql = new PDO(
-        sprintf(
-            'mysql:host=%s;port=%d;dbname=%s;charset=utf8mb4',
-            $config->getMysqlHost(),
-            $config->getMysqlPort(),
-            $config->getMysqlDatabase()
-        ),
-        $config->getMysqlUsername(),
-        $config->getMysqlPassword(),
-        [
-            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
-            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-            PDO::ATTR_EMULATE_PREPARES => false
-        ]
-    );
+    $mysqlConnection = new MySQL();
+    $mysql = $mysqlConnection->getConnection();
 
     $getUser = $mysql->prepare(
         'SELECT user_id, is_suspended
@@ -177,7 +166,9 @@ try {
     $user = $getUser->fetch();
 
     if ($user === false) {
-        $redis->del($sessionKey);
+        $redisConnection->deleteSession(
+            $sessionId
+        );
 
         http_response_code(401);
 
@@ -190,7 +181,9 @@ try {
     }
 
     if ((int) $user['is_suspended'] === 1) {
-        $redis->del($sessionKey);
+        $redisConnection->deleteSession(
+            $sessionId
+        );
 
         http_response_code(403);
 
@@ -203,33 +196,121 @@ try {
     }
 
     /*
-     * Update MongoDB profile
+     * Get MongoDB profile collection
      */
-    $mongoClient = new Client(
-        $config->getMongoUri()
-    );
-
-    $mongoDatabase = $mongoClient->selectDatabase(
-        $config->getMongoDatabase()
-    );
+    $mongoConnection = new Mongo();
+    $mongoDatabase = $mongoConnection->getDatabase();
 
     $profiles = $mongoDatabase->selectCollection(
         'profiles'
     );
 
-    $updateResult = $profiles->updateOne(
-        [
-            '_id' => $userId
-        ],
-        [
-            '$set' => [
-                'name' => $name,
-                'contact' => $contact,
-                'dob' => $dob
-            ]
-        ]
-    );
+    /*
+     * Get current profile.
+     */
+    $currentProfile = $profiles->findOne([
+        '_id' => $userId
+    ]);
 
+    if ($currentProfile === null) {
+        http_response_code(404);
+
+        echo json_encode([
+            'success' => false,
+            'message' => 'Profile details could not be found.'
+        ]);
+
+        exit;
+    }
+
+    /*
+     * Reject updates when no profile field has changed.
+     */
+    if (
+        ($currentProfile['name'] ?? '') === $name &&
+        ($currentProfile['contact'] ?? '') === $contact &&
+        ($currentProfile['dob'] ?? '') === $dob
+    ) {
+        http_response_code(400);
+
+        echo json_encode([
+            'success' => false,
+            'message' => 'No changes were made.'
+        ]);
+
+        exit;
+    }
+
+    /*
+     * Check whether another user already owns this contact number.
+     *
+     * The current user's own profile is excluded so they can
+     * keep their existing contact number when changing another field.
+     */
+    $existingContact = $profiles->findOne([
+        'contact' => $contact,
+        '_id' => [
+            '$ne' => $userId
+        ]
+    ]);
+
+    if ($existingContact !== null) {
+        http_response_code(409);
+
+        echo json_encode([
+            'success' => false,
+            'message' => 'Contact number already exists.'
+        ]);
+
+        exit;
+    }
+
+    /*
+     * Update MongoDB profile.
+     */
+    try {
+        $updateResult = $profiles->updateOne(
+            [
+                '_id' => $userId
+            ],
+            [
+                '$set' => [
+                    'name' => $name,
+                    'contact' => $contact,
+                    'dob' => $dob
+                ]
+            ]
+        );
+
+    } catch (Throwable $mongoException) {
+        /*
+         * Final protection against race conditions.
+         * MongoDB's unique index rejects duplicate contacts.
+         */
+        if (
+            str_contains(
+                $mongoException->getMessage(),
+                'E11000'
+            )
+        ) {
+            http_response_code(409);
+
+            echo json_encode([
+                'success' => false,
+                'message' => 'Contact number already exists.'
+            ]);
+
+            exit;
+        }
+
+        throw $mongoException;
+    }
+
+    /*
+     * This should not normally happen because the profile
+     * was already fetched above, but the check is retained
+     * for safety.
+     */
     if ($updateResult->getMatchedCount() === 0) {
         http_response_code(404);
 
@@ -242,36 +323,26 @@ try {
     }
 
     /*
-     * Refresh Redis session activity
+     * Refresh Redis session activity and TTL.
      */
     $lastActivity = new DateTimeImmutable('now');
 
-    $redis->hSet(
-        $sessionKey,
-        'last_activity',
+    $sessionRefreshed = $redisConnection->refreshSession(
+        $sessionId,
         $lastActivity->format('Y-m-d H:i:s')
     );
 
-    $redis->expire(
-        $sessionKey,
-        $config->getSessionTtl()
-    );
+    if (!$sessionRefreshed) {
+        throw new RuntimeException(
+            'Failed to refresh session.'
+        );
+    }
 
     http_response_code(200);
 
     echo json_encode([
         'success' => true,
         'message' => 'Profile updated successfully.'
-    ]);
-
-} catch (PDOException $exception) {
-    error_log($exception->getMessage());
-
-    http_response_code(500);
-
-    echo json_encode([
-        'success' => false,
-        'message' => 'Something went wrong. Please try again.'
     ]);
 
 } catch (Throwable $exception) {

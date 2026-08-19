@@ -2,10 +2,9 @@
 
 declare(strict_types=1);
 
-require_once __DIR__ . '/../Config/DevConfig.php';
 require_once __DIR__ . '/../Config/CorsConfig.php';
-require_once __DIR__ . '/../vendor/autoload.php';
-
+require_once __DIR__ . '/../Database/MySQL.php';
+require_once __DIR__ . '/../Database/Redis.php';
 
 CorsConfig::apply();
 
@@ -20,10 +19,19 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     exit;
 }
 
-$email = isset($_POST['email']) ? trim((string) $_POST['email']) : '';
-$password = isset($_POST['password']) ? (string) $_POST['password'] : '';
+$email = isset($_POST['email'])
+    ? trim((string) $_POST['email'])
+    : '';
 
-if ($email === '' || strlen($email) > 254 || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+$password = isset($_POST['password'])
+    ? (string) $_POST['password']
+    : '';
+
+if (
+    $email === '' ||
+    strlen($email) > 254 ||
+    !filter_var($email, FILTER_VALIDATE_EMAIL)
+) {
     http_response_code(400);
 
     echo json_encode([
@@ -45,27 +53,16 @@ if ($password === '') {
     exit;
 }
 
-$config = DevConfig::getInstance();
-
-$mysql = null;
-
 try {
-    $mysql = new PDO(
-        sprintf(
-            'mysql:host=%s;port=%d;dbname=%s;charset=utf8mb4',
-            $config->getMysqlHost(),
-            $config->getMysqlPort(),
-            $config->getMysqlDatabase()
-        ),
-        $config->getMysqlUsername(),
-        $config->getMysqlPassword(),
-        [
-            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
-            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-            PDO::ATTR_EMULATE_PREPARES => false
-        ]
-    );
+    /*
+     * Get MySQL connection
+     */
+    $mysqlConnection = new MySQL();
+    $mysql = $mysqlConnection->getConnection();
 
+    /*
+     * Find user
+     */
     $getUser = $mysql->prepare(
         'SELECT user_id, password_hash, is_suspended
          FROM users
@@ -90,6 +87,9 @@ try {
         exit;
     }
 
+    /*
+     * Verify password
+     */
     if (!password_verify($password, $user['password_hash'])) {
         http_response_code(401);
 
@@ -101,6 +101,9 @@ try {
         exit;
     }
 
+    /*
+     * Check account suspension
+     */
     if ((int) $user['is_suspended'] === 1) {
         http_response_code(403);
 
@@ -112,6 +115,9 @@ try {
         exit;
     }
 
+    /*
+     * Generate session token
+     */
     $sessionToken = rtrim(
         strtr(
             base64_encode(random_bytes(32)),
@@ -121,29 +127,37 @@ try {
         '='
     );
 
-    $sessionKey = 'session:' . hash('sha256', $sessionToken);
-
-    $createdAt = new DateTimeImmutable('now');
-    $createdAtString = $createdAt->format('Y-m-d H:i:s');
-
-    $redis = new Redis();
-
-    $redis->connect(
-        $config->getRedisHost(),
-        $config->getRedisPort()
+    /*
+     * Hash token before storing session in Redis
+     */
+    $sessionId = hash(
+        'sha256',
+        $sessionToken
     );
 
-    if ($config->getRedisPassword() !== null) {
-        $redis->auth($config->getRedisPassword());
+    $createdAt = new DateTimeImmutable('now');
+
+    $createdAtString = $createdAt->format(
+        'Y-m-d H:i:s'
+    );
+
+    /*
+     * Create Redis session
+     */
+    $redisConnection = new RedisConnection();
+
+    $sessionCreated = $redisConnection->createSession(
+        $sessionId,
+        $user['user_id'],
+        $createdAtString,
+        $createdAtString
+    );
+
+    if (!$sessionCreated) {
+        throw new RuntimeException(
+            'Failed to create session.'
+        );
     }
-
-    $redis->hMSet($sessionKey, [
-        'user_id' => $user['user_id'],
-        'created_at' => $createdAtString,
-        'last_activity' => $createdAtString
-    ]);
-
-    $redis->expire($sessionKey, $config->getSessionTtl());
 
     http_response_code(200);
 
@@ -151,15 +165,7 @@ try {
         'success' => true,
         'token' => $sessionToken
     ]);
-} catch (PDOException $exception) {
-    error_log($exception->getMessage());
 
-    http_response_code(500);
-
-    echo json_encode([
-        'success' => false,
-        'message' => 'Something went wrong. Please try again.'
-    ]);
 } catch (Throwable $exception) {
     error_log($exception->getMessage());
 

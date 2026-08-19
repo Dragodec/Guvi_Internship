@@ -2,11 +2,10 @@
 
 declare(strict_types=1);
 
-require_once __DIR__ . '/../Config/DevConfig.php';
 require_once __DIR__ . '/../Config/CorsConfig.php';
-require_once __DIR__ . '/../vendor/autoload.php';
-
-use MongoDB\Client;
+require_once __DIR__ . '/../Database/Redis.php';
+require_once __DIR__ . '/../Database/MySQL.php';
+require_once __DIR__ . '/../Database/Mongo.php';
 
 CorsConfig::apply();
 
@@ -36,25 +35,25 @@ if ($sessionToken === '') {
     exit;
 }
 
-$config = DevConfig::getInstance();
-
-$mysql = null;
-
 try {
-    $sessionKey = 'session:' . hash('sha256', $sessionToken);
-
-    $redis = new Redis();
-
-    $redis->connect(
-        $config->getRedisHost(),
-        $config->getRedisPort()
+    /*
+     * Convert browser token into Redis session ID
+     */
+    $sessionId = hash(
+        'sha256',
+        $sessionToken
     );
 
-    if ($config->getRedisPassword() !== null) {
-        $redis->auth($config->getRedisPassword());
-    }
+    /*
+     * Get Redis session
+     */
+    $redisConnection = new RedisConnection();
 
-    if (!$redis->exists($sessionKey)) {
+    $sessionData = $redisConnection->getSession(
+        $sessionId
+    );
+
+    if ($sessionData === null) {
         http_response_code(401);
 
         echo json_encode([
@@ -65,14 +64,17 @@ try {
         exit;
     }
 
-    $sessionData = $redis->hGetAll($sessionKey);
-
+    /*
+     * Validate session structure
+     */
     if (
         !isset($sessionData['user_id']) ||
         !isset($sessionData['created_at']) ||
         !isset($sessionData['last_activity'])
     ) {
-        $redis->del($sessionKey);
+        $redisConnection->deleteSession(
+            $sessionId
+        );
 
         http_response_code(401);
 
@@ -86,21 +88,11 @@ try {
 
     $userId = $sessionData['user_id'];
 
-    $mysql = new PDO(
-        sprintf(
-            'mysql:host=%s;port=%d;dbname=%s;charset=utf8mb4',
-            $config->getMysqlHost(),
-            $config->getMysqlPort(),
-            $config->getMysqlDatabase()
-        ),
-        $config->getMysqlUsername(),
-        $config->getMysqlPassword(),
-        [
-            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
-            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-            PDO::ATTR_EMULATE_PREPARES => false
-        ]
-    );
+    /*
+     * Verify MySQL account
+     */
+    $mysqlConnection = new MySQL();
+    $mysql = $mysqlConnection->getConnection();
 
     $getUser = $mysql->prepare(
         'SELECT email, is_suspended
@@ -116,7 +108,9 @@ try {
     $user = $getUser->fetch();
 
     if ($user === false) {
-        $redis->del($sessionKey);
+        $redisConnection->deleteSession(
+            $sessionId
+        );
 
         http_response_code(401);
 
@@ -129,7 +123,9 @@ try {
     }
 
     if ((int) $user['is_suspended'] === 1) {
-        $redis->del($sessionKey);
+        $redisConnection->deleteSession(
+            $sessionId
+        );
 
         http_response_code(403);
 
@@ -141,13 +137,15 @@ try {
         exit;
     }
 
-    $mongoClient = new Client($config->getMongoUri());
+    /*
+     * Get MongoDB profile
+     */
+    $mongoConnection = new Mongo();
+    $mongoDatabase = $mongoConnection->getDatabase();
 
-    $mongoDatabase = $mongoClient->selectDatabase(
-        $config->getMongoDatabase()
+    $profiles = $mongoDatabase->selectCollection(
+        'profiles'
     );
-
-    $profiles = $mongoDatabase->selectCollection('profiles');
 
     $profile = $profiles->findOne([
         '_id' => $userId
@@ -164,22 +162,21 @@ try {
         exit;
     }
 
+    /*
+     * Refresh session activity and TTL
+     */
     $lastActivity = new DateTimeImmutable('now');
 
-    $lastActivityString = $lastActivity->format(
-        'Y-m-d H:i:s'
+    $sessionRefreshed = $redisConnection->refreshSession(
+        $sessionId,
+        $lastActivity->format('Y-m-d H:i:s')
     );
 
-    $redis->hSet(
-        $sessionKey,
-        'last_activity',
-        $lastActivityString
-    );
-
-    $redis->expire(
-        $sessionKey,
-        $config->getSessionTtl()
-    );
+    if (!$sessionRefreshed) {
+        throw new RuntimeException(
+            'Failed to refresh session.'
+        );
+    }
 
     http_response_code(200);
 
@@ -193,16 +190,6 @@ try {
         ]
     ]);
 
-} catch (PDOException $exception) {
-    error_log($exception->getMessage());
-
-    http_response_code(500);
-
-    echo json_encode([
-        'success' => false,
-        'message' => 'Something went wrong. Please try again.'
-    ]);
-
 } catch (Throwable $exception) {
     error_log($exception->getMessage());
 
@@ -213,4 +200,3 @@ try {
         'message' => 'Something went wrong. Please try again.'
     ]);
 }
-
