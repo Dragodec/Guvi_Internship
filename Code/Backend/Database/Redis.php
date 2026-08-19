@@ -25,10 +25,17 @@ class RedisConnection
         try {
             $this->connection = new Redis();
 
-            $this->connection->connect(
-                $host,
-                $port
-            );
+            if ($config->getRedisTls()) {
+                $this->connection->connect(
+                    'tls://' . $host,
+                    $port
+                );
+            } else {
+                $this->connection->connect(
+                    $host,
+                    $port
+                );
+            }
 
             if ($password !== null) {
                 $this->connection->auth(

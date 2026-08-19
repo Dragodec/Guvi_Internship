@@ -3,12 +3,14 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/../Database/Redis.php';
+require_once __DIR__ . '/../Config/DevConfig.php';
 
 try {
     $redis = new RedisConnection();
+    $config = DevConfig::getInstance();
 
     $sessionId = bin2hex(random_bytes(16));
-    $userUuid = 'test-user-' . bin2hex(random_bytes(8));
+    $userId = 'test-user-' . bin2hex(random_bytes(8));
 
     $timestamp = date('Y-m-d H:i:s');
 
@@ -17,7 +19,7 @@ try {
     // Create session
     $created = $redis->createSession(
         $sessionId,
-        $userUuid,
+        $userId,
         $timestamp,
         $timestamp
     );
@@ -37,16 +39,17 @@ try {
     }
 
     echo PHP_EOL . "Session data:" . PHP_EOL;
-    echo "User UUID: " . $session['user_uuid'] . PHP_EOL;
+    echo "User ID: " . $session['user_id'] . PHP_EOL;
     echo "Created At: " . $session['created_at'] . PHP_EOL;
     echo "Last Activity: " . $session['last_activity'] . PHP_EOL;
 
     // Check TTL
     $ttl = $redis->getSessionTtl($sessionId);
+    $expectedTtl = $config->getSessionTtl();
 
     echo PHP_EOL . "Initial TTL: " . $ttl . " seconds" . PHP_EOL;
 
-    if ($ttl <= 0 || $ttl > 1800) {
+    if ($ttl <= 0 || $ttl > $expectedTtl) {
         throw new RuntimeException('Unexpected session TTL.');
     }
 

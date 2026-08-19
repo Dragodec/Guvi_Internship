@@ -22,6 +22,7 @@ class DevConfig
     private string $redisHost;
     private int $redisPort;
     private ?string $redisPassword;
+    private bool $redisTls;
 
     private string $clientUrl;
 
@@ -47,18 +48,25 @@ class DevConfig
             ? $_ENV['REDIS_PASSWORD']
             : null;
 
+        $this->redisTls = filter_var(
+            $_ENV['REDIS_TLS'] ?? false,
+            FILTER_VALIDATE_BOOL
+        );
+
         $this->clientUrl = $_ENV['CLIENT_URL'];
 
         $sessionTtl = filter_var(
-        $_ENV['SESSION_TTL'] ?? null,
-        FILTER_VALIDATE_INT
-    );
+            $_ENV['SESSION_TTL'] ?? null,
+            FILTER_VALIDATE_INT
+        );
 
-    if ($sessionTtl === false || $sessionTtl <= 0) {
-        throw new RuntimeException('SESSION_TTL must be a positive integer.');
-    }
+        if ($sessionTtl === false || $sessionTtl <= 0) {
+            throw new RuntimeException(
+                'SESSION_TTL must be a positive integer.'
+            );
+        }
 
-    $this->sessionTtl = $sessionTtl;
+        $this->sessionTtl = $sessionTtl;
     }
 
     public static function getInstance(): DevConfig
@@ -118,6 +126,11 @@ class DevConfig
     public function getRedisPassword(): ?string
     {
         return $this->redisPassword;
+    }
+
+    public function getRedisTls(): bool
+    {
+        return $this->redisTls;
     }
 
     public function getClientUrl(): string

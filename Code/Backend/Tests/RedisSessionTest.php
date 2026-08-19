@@ -9,10 +9,12 @@ $config = DevConfig::getInstance();
 
 echo "=== Redis Login Session Test ===" . PHP_EOL . PHP_EOL;
 
-$sessionToken = trim((string) readline('Enter session token from localStorage: '));
+$sessionToken = trim((string) readline(
+    'Enter session token from localStorage: '
+));
 
 if ($sessionToken === '') {
-    echo "Session token cannot be empty." . PHP_EOL;
+    echo "[FAIL] Session token cannot be empty." . PHP_EOL;
     exit(1);
 }
 
@@ -21,15 +23,31 @@ $redis = new Redis();
 try {
     $connected = $redis->connect(
         $config->getRedisHost(),
-        $config->getRedisPort()
+        $config->getRedisPort(),
+        5.0,
+        null,
+        0,
+        0,
+        [
+            'stream' => [
+                'verify_peer' => true,
+                'verify_peer_name' => true,
+            ]
+        ]
     );
 
     if (!$connected) {
         throw new RuntimeException('Redis connection failed.');
     }
 
-    if ($config->getRedisPassword() !== null) {
-        $redis->auth($config->getRedisPassword());
+    $redisPassword = $config->getRedisPassword();
+
+    if ($redisPassword !== null && $redisPassword !== '') {
+        if (!$redis->auth($redisPassword)) {
+            throw new RuntimeException(
+                'Redis authentication failed.'
+            );
+        }
     }
 
     echo "[PASS] Redis connection successful." . PHP_EOL;
@@ -63,7 +81,10 @@ try {
     ];
 
     foreach ($requiredFields as $field) {
-        if (!array_key_exists($field, $sessionData)) {
+        if (
+            !array_key_exists($field, $sessionData)
+            || $sessionData[$field] === ''
+        ) {
             echo "[FAIL] Missing Redis field: {$field}" . PHP_EOL;
             exit(1);
         }
@@ -75,8 +96,18 @@ try {
 
     $ttl = $redis->ttl($sessionKey);
 
+    if ($ttl === -2) {
+        echo "[FAIL] Redis session key does not exist." . PHP_EOL;
+        exit(1);
+    }
+
+    if ($ttl === -1) {
+        echo "[FAIL] Redis session has no expiration TTL." . PHP_EOL;
+        exit(1);
+    }
+
     if ($ttl <= 0) {
-        echo "[FAIL] Redis session has no active TTL." . PHP_EOL;
+        echo "[FAIL] Redis session TTL is invalid." . PHP_EOL;
         exit(1);
     }
 
@@ -89,7 +120,9 @@ try {
 
     echo "[PASS] Raw session token is not used as Redis key." . PHP_EOL;
 
-    if ($sessionHash !== hash('sha256', $sessionToken)) {
+    $expectedHash = hash('sha256', $sessionToken);
+
+    if ($sessionHash !== $expectedHash) {
         echo "[FAIL] Session token hash verification failed." . PHP_EOL;
         exit(1);
     }
@@ -99,10 +132,12 @@ try {
     echo PHP_EOL;
     echo "=== Redis Session Verification Successful ===" . PHP_EOL;
     echo PHP_EOL;
-    echo "User UUID:      {$sessionData['user_id']}" . PHP_EOL;
+
+    echo "User ID:        {$sessionData['user_id']}" . PHP_EOL;
     echo "Created At:     {$sessionData['created_at']}" . PHP_EOL;
     echo "Last Activity:  {$sessionData['last_activity']}" . PHP_EOL;
     echo "TTL:            {$ttl} seconds" . PHP_EOL;
+
 } catch (Throwable $exception) {
     echo PHP_EOL;
     echo "[FAIL] " . $exception->getMessage() . PHP_EOL;
