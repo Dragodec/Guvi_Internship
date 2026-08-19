@@ -1,39 +1,64 @@
 $(document).ready(function() {
 
-    $('.toggle-password').on('click', function() {
-        const targetId = $(this).attr('data-target');
-        const inputField = $('#' + targetId);
-        const icon = $(this).find('i');
+    const sessionToken = localStorage.getItem('session_token');
 
-        if (inputField.attr('type') === 'password') {
-            inputField.attr('type', 'text');
-            icon.removeClass('bi-eye').addClass('bi-eye-slash');
-        } else {
-            inputField.attr('type', 'password');
-            icon.removeClass('bi-eye-slash').addClass('bi-eye');
-        }
-    });
+    if (!sessionToken) {
+        window.location.href = 'LoginPage.html';
+        return;
+    }
 
+    const alertBox = $('#alertMessage');
+    const nameField = $('#name');
+    const emailField = $('#email');
+    const contactField = $('#contact');
     const dobField = $('#dob');
 
     const yesterday = new Date();
     yesterday.setDate(yesterday.getDate() - 1);
-
     const year = yesterday.getFullYear();
     const month = String(yesterday.getMonth() + 1).padStart(2, '0');
     const day = String(yesterday.getDate()).padStart(2, '0');
-
     dobField.attr('max', `${year}-${month}-${day}`);
 
-    $('#registerForm').on('submit', function(e) {
-        e.preventDefault();
+    $.ajax({
+        url: 'http://127.0.0.1:8000/Controllers/Profile.php',
+        type: 'POST',
+        data: {
+            token: sessionToken
+        },
+        dataType: 'json',
 
-        const nameField = $('#name');
-        const emailField = $('#email');
-        const contactField = $('#contact');
-        const passwordField = $('#password');
-        const confirmPasswordField = $('#confirmPassword');
-        const alertBox = $('#alertMessage');
+        success: function(response) {
+            if (response.success && response.data) {
+                nameField.val(response.data.name || '');
+                emailField.val(response.data.email || '');
+                contactField.val(response.data.contact || '');
+                dobField.val(response.data.dob || '');
+            } else {
+                localStorage.removeItem('session_token');
+                window.location.href = 'LoginPage.html';
+            }
+        },
+
+        error: function(xhr) {
+            if (xhr.status === 401 || xhr.status === 403) {
+                localStorage.removeItem('session_token');
+                window.location.href = 'LoginPage.html';
+                return;
+            }
+
+            const message = xhr.responseJSON?.message ||
+                'Failed to load profile details.';
+
+            alertBox
+                .removeClass('d-none')
+                .addClass('alert-danger')
+                .text(message);
+        }
+    });
+
+    $('#updateProfileForm').on('submit', function(e) {
+        e.preventDefault();
 
         alertBox
             .addClass('d-none')
@@ -49,14 +74,6 @@ $(document).ready(function() {
 
         if (!nameValue || !nameRegex.test(nameValue)) {
             nameField.addClass('is-invalid');
-            isValid = false;
-        }
-
-        const emailValue = emailField.val().trim();
-        const emailRegex = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
-
-        if (!emailValue || !emailRegex.test(emailValue)) {
-            emailField.addClass('is-invalid');
             isValid = false;
         }
 
@@ -87,33 +104,19 @@ $(document).ready(function() {
             }
         }
 
-        if (!passwordField.val()) {
-            passwordField.addClass('is-invalid');
-            isValid = false;
-        }
-
-        if (
-            !confirmPasswordField.val() ||
-            passwordField.val() !== confirmPasswordField.val()
-        ) {
-            confirmPasswordField.addClass('is-invalid');
-            isValid = false;
-        }
-
         if (!isValid) {
             return;
         }
 
         const formData = {
+            token: sessionToken,
             name: nameValue,
-            email: emailValue,
             contact: contactValue,
-            dob: dobValue,
-            password: passwordField.val()
+            dob: dobValue
         };
 
         $.ajax({
-            url: 'http://127.0.0.1:8000/Controllers/Register.php',
+            url: 'http://127.0.0.1:8000/Controllers/UpdateProfile.php',
             type: 'POST',
             data: formData,
             dataType: 'json',
@@ -123,20 +126,26 @@ $(document).ready(function() {
                     alertBox
                         .removeClass('d-none')
                         .addClass('alert-success')
-                        .text('Registration successful! Redirecting...');
+                        .text('Profile updated successfully! Redirecting...');
 
                     setTimeout(function() {
-                        window.location.href = 'LoginPage.html';
-                    }, 2000);
+                        window.location.href = 'ProfilePage.html';
+                    }, 1500);
                 } else {
                     alertBox
                         .removeClass('d-none')
                         .addClass('alert-danger')
-                        .text(response.message || 'Something went wrong. Please try again.');
+                        .text(response.message || 'Failed to update profile.');
                 }
             },
 
             error: function(xhr) {
+                if (xhr.status === 401 || xhr.status === 403) {
+                    localStorage.removeItem('session_token');
+                    window.location.href = 'LoginPage.html';
+                    return;
+                }
+
                 const message = xhr.responseJSON?.message ||
                     'Something went wrong. Please try again.';
 
@@ -152,5 +161,28 @@ $(document).ready(function() {
         if ($(this).val()) {
             $(this).removeClass('is-invalid');
         }
+    });
+
+    $('#logoutBtn').on('click', function() {
+        const sessionToken = localStorage.getItem('session_token');
+
+        if (!sessionToken) {
+            window.location.href = 'LoginPage.html';
+            return;
+        }
+
+        $.ajax({
+            url: 'http://127.0.0.1:8000/Controllers/Logout.php',
+            type: 'POST',
+            data: {
+                token: sessionToken
+            },
+            dataType: 'json',
+
+            complete: function() {
+                localStorage.removeItem('session_token');
+                window.location.href = 'LoginPage.html';
+            }
+        });
     });
 });

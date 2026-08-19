@@ -10,7 +10,24 @@ $(document).ready(function() {
     const alertBox = $('#alertMessage');
     const nameContainer = $('#displayName');
     const emailContainer = $('#displayEmail');
+    const contactContainer = $('#displayContact');
     const dobContainer = $('#displayDob');
+    const ageContainer = $('#displayAge');
+
+    function calculateAge(dobString) {
+        if (!dobString) return '-';
+        const birthDate = new Date(`${dobString}T00:00:00`);
+        if (isNaN(birthDate.getTime())) return '-';
+        
+        const today = new Date();
+        let age = today.getFullYear() - birthDate.getFullYear();
+        const monthDiff = today.getMonth() - birthDate.getMonth();
+        
+        if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birthDate.getDate())) {
+            age--;
+        }
+        return age >= 0 ? `${age} years` : '-';
+    }
 
     $.ajax({
         url: 'http://127.0.0.1:8000/Controllers/Profile.php',
@@ -24,7 +41,9 @@ $(document).ready(function() {
             if (response.success && response.data) {
                 nameContainer.text(response.data.name || '-');
                 emailContainer.text(response.data.email || '-');
+                contactContainer.text(response.data.contact || '-');
                 dobContainer.text(response.data.dob || '-');
+                ageContainer.text(calculateAge(response.data.dob));
             } else {
                 localStorage.removeItem('session_token');
                 window.location.href = 'LoginPage.html';
@@ -32,13 +51,7 @@ $(document).ready(function() {
         },
 
         error: function(xhr) {
-            if (xhr.status === 401) {
-                localStorage.removeItem('session_token');
-                window.location.href = 'LoginPage.html';
-                return;
-            }
-
-            if (xhr.status === 403) {
+            if (xhr.status === 401 || xhr.status === 403) {
                 localStorage.removeItem('session_token');
                 window.location.href = 'LoginPage.html';
                 return;
@@ -54,7 +67,9 @@ $(document).ready(function() {
 
             nameContainer.text('-');
             emailContainer.text('-');
+            contactContainer.text('-');
             dobContainer.text('-');
+            ageContainer.text('-');
         }
     });
 

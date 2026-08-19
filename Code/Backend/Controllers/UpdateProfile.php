@@ -25,6 +25,18 @@ $sessionToken = isset($_POST['token'])
     ? trim((string) $_POST['token'])
     : '';
 
+$name = isset($_POST['name'])
+    ? trim((string) $_POST['name'])
+    : '';
+
+$contact = isset($_POST['contact'])
+    ? trim((string) $_POST['contact'])
+    : '';
+
+$dob = isset($_POST['dob'])
+    ? trim((string) $_POST['dob'])
+    : '';
+
 if ($sessionToken === '') {
     http_response_code(401);
 
@@ -36,11 +48,57 @@ if ($sessionToken === '') {
     exit;
 }
 
+if (
+    $name === '' ||
+    strlen($name) > 50 ||
+    preg_match('/\d/', $name)
+) {
+    http_response_code(400);
+
+    echo json_encode([
+        'success' => false,
+        'message' => 'Invalid name.'
+    ]);
+
+    exit;
+}
+
+if (!preg_match('/^\d{10}$/', $contact)) {
+    http_response_code(400);
+
+    echo json_encode([
+        'success' => false,
+        'message' => 'Invalid contact number.'
+    ]);
+
+    exit;
+}
+
+$dobDate = DateTime::createFromFormat('Y-m-d', $dob);
+
+if (
+    $dobDate === false ||
+    $dobDate->format('Y-m-d') !== $dob ||
+    $dobDate >= new DateTime('today')
+) {
+    http_response_code(400);
+
+    echo json_encode([
+        'success' => false,
+        'message' => 'Invalid date of birth.'
+    ]);
+
+    exit;
+}
+
 $config = DevConfig::getInstance();
 
 $mysql = null;
 
 try {
+    /*
+     * Redis session validation
+     */
     $sessionKey = 'session:' . hash('sha256', $sessionToken);
 
     $redis = new Redis();
@@ -86,6 +144,9 @@ try {
 
     $userId = $sessionData['user_id'];
 
+    /*
+     * Verify MySQL account
+     */
     $mysql = new PDO(
         sprintf(
             'mysql:host=%s;port=%d;dbname=%s;charset=utf8mb4',
@@ -103,7 +164,7 @@ try {
     );
 
     $getUser = $mysql->prepare(
-        'SELECT email, is_suspended
+        'SELECT user_id, is_suspended
          FROM users
          WHERE user_id = :user_id
          LIMIT 1'
@@ -141,19 +202,35 @@ try {
         exit;
     }
 
-    $mongoClient = new Client($config->getMongoUri());
+    /*
+     * Update MongoDB profile
+     */
+    $mongoClient = new Client(
+        $config->getMongoUri()
+    );
 
     $mongoDatabase = $mongoClient->selectDatabase(
         $config->getMongoDatabase()
     );
 
-    $profiles = $mongoDatabase->selectCollection('profiles');
+    $profiles = $mongoDatabase->selectCollection(
+        'profiles'
+    );
 
-    $profile = $profiles->findOne([
-        '_id' => $userId
-    ]);
+    $updateResult = $profiles->updateOne(
+        [
+            '_id' => $userId
+        ],
+        [
+            '$set' => [
+                'name' => $name,
+                'contact' => $contact,
+                'dob' => $dob
+            ]
+        ]
+    );
 
-    if ($profile === null) {
+    if ($updateResult->getMatchedCount() === 0) {
         http_response_code(404);
 
         echo json_encode([
@@ -164,16 +241,15 @@ try {
         exit;
     }
 
+    /*
+     * Refresh Redis session activity
+     */
     $lastActivity = new DateTimeImmutable('now');
-
-    $lastActivityString = $lastActivity->format(
-        'Y-m-d H:i:s'
-    );
 
     $redis->hSet(
         $sessionKey,
         'last_activity',
-        $lastActivityString
+        $lastActivity->format('Y-m-d H:i:s')
     );
 
     $redis->expire(
@@ -185,12 +261,7 @@ try {
 
     echo json_encode([
         'success' => true,
-        'data' => [
-            'name' => $profile['name'] ?? '',
-            'email' => $user['email'],
-            'contact' => $profile['contact'] ?? '',
-            'dob' => $profile['dob'] ?? ''
-        ]
+        'message' => 'Profile updated successfully.'
     ]);
 
 } catch (PDOException $exception) {
@@ -213,4 +284,3 @@ try {
         'message' => 'Something went wrong. Please try again.'
     ]);
 }
-
