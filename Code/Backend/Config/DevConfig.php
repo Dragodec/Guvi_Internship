@@ -21,52 +21,42 @@ class DevConfig
 
     private string $redisHost;
     private int $redisPort;
-    private ?string $redisPassword;
+    private string $redisPassword;
     private bool $redisTls;
 
     private string $clientUrl;
 
-    private int $sessionTtl;
-
     private function __construct()
     {
+        /*
+         * Local development:
+         * Loads values from .env if the file exists.
+         *
+         * Production (Render):
+         * .env does not exist, so safeLoad() does not throw an error.
+         * Environment variables provided by Render remain available.
+         */
         $dotenv = Dotenv::createImmutable(__DIR__ . '/..');
-        $dotenv->load();
+        $dotenv->safeLoad();
 
-        $this->mysqlHost = $_ENV['MYSQL_HOST'];
-        $this->mysqlPort = (int) $_ENV['MYSQL_PORT'];
-        $this->mysqlDatabase = $_ENV['MYSQL_DATABASE'];
-        $this->mysqlUsername = $_ENV['MYSQL_USERNAME'];
-        $this->mysqlPassword = $_ENV['MYSQL_PASSWORD'];
+        $this->mysqlHost = $_ENV['MYSQL_HOST'] ?? '';
+        $this->mysqlPort = (int) ($_ENV['MYSQL_PORT'] ?? 3306);
+        $this->mysqlDatabase = $_ENV['MYSQL_DATABASE'] ?? '';
+        $this->mysqlUsername = $_ENV['MYSQL_USERNAME'] ?? '';
+        $this->mysqlPassword = $_ENV['MYSQL_PASSWORD'] ?? '';
 
-        $this->mongoUri = $_ENV['MONGO_URI'];
-        $this->mongoDatabase = $_ENV['MONGO_DATABASE'];
+        $this->mongoUri = $_ENV['MONGO_URI'] ?? '';
+        $this->mongoDatabase = $_ENV['MONGO_DATABASE'] ?? '';
 
-        $this->redisHost = $_ENV['REDIS_HOST'];
-        $this->redisPort = (int) $_ENV['REDIS_PORT'];
-        $this->redisPassword = !empty($_ENV['REDIS_PASSWORD'])
-            ? $_ENV['REDIS_PASSWORD']
-            : null;
-
+        $this->redisHost = $_ENV['REDIS_HOST'] ?? '';
+        $this->redisPort = (int) ($_ENV['REDIS_PORT'] ?? 6379);
+        $this->redisPassword = $_ENV['REDIS_PASSWORD'] ?? '';
         $this->redisTls = filter_var(
             $_ENV['REDIS_TLS'] ?? false,
-            FILTER_VALIDATE_BOOL
+            FILTER_VALIDATE_BOOLEAN
         );
 
-        $this->clientUrl = $_ENV['CLIENT_URL'];
-
-        $sessionTtl = filter_var(
-            $_ENV['SESSION_TTL'] ?? null,
-            FILTER_VALIDATE_INT
-        );
-
-        if ($sessionTtl === false || $sessionTtl <= 0) {
-            throw new RuntimeException(
-                'SESSION_TTL must be a positive integer.'
-            );
-        }
-
-        $this->sessionTtl = $sessionTtl;
+        $this->clientUrl = $_ENV['CLIENT_URL'] ?? '';
     }
 
     public static function getInstance(): DevConfig
@@ -123,7 +113,7 @@ class DevConfig
         return $this->redisPort;
     }
 
-    public function getRedisPassword(): ?string
+    public function getRedisPassword(): string
     {
         return $this->redisPassword;
     }
@@ -136,10 +126,5 @@ class DevConfig
     public function getClientUrl(): string
     {
         return $this->clientUrl;
-    }
-
-    public function getSessionTtl(): int
-    {
-        return $this->sessionTtl;
     }
 }
